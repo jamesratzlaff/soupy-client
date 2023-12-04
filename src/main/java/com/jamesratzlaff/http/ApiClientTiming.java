@@ -2,9 +2,6 @@ package com.jamesratzlaff.http;
 
 import java.net.http.HttpHeaders;
 import java.net.http.HttpResponse;
-import java.text.DateFormat;
-import java.text.ParseException;
-import java.time.LocalDateTime;
 import java.util.Date;
 
 
