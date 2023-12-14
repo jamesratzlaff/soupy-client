@@ -47,8 +47,10 @@ import com.github.mizosoft.methanol.FormBodyPublisher;
 import com.github.mizosoft.methanol.HttpCache;
 import com.github.mizosoft.methanol.Methanol;
 import com.github.mizosoft.methanol.Methanol.Interceptor;
+import com.github.mizosoft.methanol.MoreBodyHandlers;
 import com.github.mizosoft.methanol.MultipartBodyPublisher;
 import com.github.mizosoft.methanol.MutableRequest;
+import com.github.mizosoft.methanol.TypeRef;
 
 public class SoupyClient extends HttpClient {
 
@@ -70,9 +72,70 @@ public class SoupyClient extends HttpClient {
 	public CookieManager getCookieManager() {
 		return this.cookieManager;
 	}
-	
+
 	public String getBaseUri() {
 		return this.baseURI;
+	}
+
+	protected MutableRequest createObjectRequest(String method, String path, String referer, BodyPublisher bp) {
+		var request = MutableRequest.create(path);
+		if ("GET".equals(method)) {
+			bp = null;
+			request = request.method(method, null);
+		} else if(bp==null) {
+			bp=BodyPublishers.noBody();
+		}
+		request = request.method(method, bp);
+		request.header("Referer", referer);
+		request.header("Accept","application/json");
+		return request;
+	}
+	
+	public <T> T getObjectByClass(String method, String path, String referer, BodyPublisher bp, Class<T> clazz) {
+		MutableRequest request=createObjectRequest(method, path, referer, bp);
+		HttpResponse<T> response;
+		T reso = null;
+		try {
+			response = send(request, MoreBodyHandlers.ofObject(clazz));
+			reso = response.body();
+		} catch (IOException | InterruptedException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+		return reso;
+	}
+
+	public <T> CompletableFuture<T> getObjectByClassAsync(String method, String path, String referer, BodyPublisher bp,
+			Class<T> clazz) {
+		var request = createObjectRequest(method, path,referer, bp);
+		CompletableFuture<HttpResponse<T>> response = sendAsync(request, MoreBodyHandlers.ofObject(clazz));
+		CompletableFuture<T> reso = response.thenApply(r -> r.body());
+		return reso;
+	}
+	public <T> CompletableFuture<T> getObjectAsync(String method, String path,String referer, BodyPublisher bp,
+			Class<T> clazz) {
+		var request = createObjectRequest(method, path,referer, bp);
+		CompletableFuture<HttpResponse<T>> response = sendAsync(request, MoreBodyHandlers.ofObject(new TypeRef<T>() {}));
+		CompletableFuture<T> reso = response.thenApply(r -> r.body());
+		return reso;
+	}
+
+	public <T> T getObject(String method, String path, String referer, BodyPublisher bp) {
+		var request = createObjectRequest(method, path, referer, bp);
+		HttpResponse<T> response;
+		T reso = null;
+		try {
+			response = send(request, MoreBodyHandlers.ofObject(new TypeRef<T>() {
+			}));
+			reso = response.body();
+		} catch (IOException | InterruptedException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+		return reso;
+
 	}
 
 	protected Methanol getMethanolClient() {
@@ -82,7 +145,7 @@ public class SoupyClient extends HttpClient {
 			if (defHeaders.length > 0) {
 				builder = builder.defaultHeaders(defHeaders);
 			}
-			builder=builder.followRedirects(Redirect.NORMAL);
+			builder = builder.followRedirects(Redirect.NORMAL);
 			delegate = builder.build();
 		}
 
@@ -92,12 +155,12 @@ public class SoupyClient extends HttpClient {
 	public List<HttpCookie> getCookies() {
 		return this.getCookies(null);
 	}
-	
+
 	protected HttpCookie makeCookie(String name, String value) {
 		HttpCookie cookie = new HttpCookie(name, value);
 		cookie.setMaxAge(86400);
 		return cookie;
-		
+
 	}
 
 	public HttpCookie getCookie(String name) {
@@ -116,8 +179,6 @@ public class SoupyClient extends HttpClient {
 				.filter(c -> c.getName().equalsIgnoreCase(name)).collect(Collectors.toList());
 		return cookies;
 	}
-	
-	
 
 	public int hashCode() {
 		return getMethanolClient().hashCode();
@@ -292,9 +353,11 @@ public class SoupyClient extends HttpClient {
 		}
 		return response;
 	}
-	protected CompletableFuture<HttpResponse<String>> getHttpResponseAsync(String path){
+
+	protected CompletableFuture<HttpResponse<String>> getHttpResponseAsync(String path) {
 		return getHttpResponseAsync(path, null);
 	}
+
 	protected CompletableFuture<HttpResponse<String>> getHttpResponseAsync(String path, String referer) {
 		CompletableFuture<HttpResponse<String>> response = null;
 		HttpRequest req = createHttpGetRequest(path, referer);
@@ -311,14 +374,15 @@ public class SoupyClient extends HttpClient {
 	}
 
 	public Document getDocumentWithBase64EncLastPathNode(String path, String referer) {
-		path=createBase64EncLastPathNodeStr(path, referer);
+		path = createBase64EncLastPathNodeStr(path, referer);
 		return getDocument(path, referer);
 	}
-	public CompletableFuture<Document> getDocumentWithBase64EncLastPathNodeAsync(String path, String referer){
-		path=createBase64EncLastPathNodeStr(path, referer);
+
+	public CompletableFuture<Document> getDocumentWithBase64EncLastPathNodeAsync(String path, String referer) {
+		path = createBase64EncLastPathNodeStr(path, referer);
 		return getDocumentAsync(path, referer);
 	}
-	
+
 	private static String createBase64EncLastPathNodeStr(String path, String referer) {
 		if (referer != null) {
 			if (!path.endsWith("/")) {
@@ -342,11 +406,11 @@ public class SoupyClient extends HttpClient {
 		}
 		return d;
 	}
-	
-	public CompletableFuture<Document> getDocumentAsync(String path, String referer){
+
+	public CompletableFuture<Document> getDocumentAsync(String path, String referer) {
 		CompletableFuture<HttpResponse<String>> resp = getHttpResponseAsync(path, referer);
-		CompletableFuture<Document> cDoc =  resp.thenApply(r->{
-			if(r!=null) {
+		CompletableFuture<Document> cDoc = resp.thenApply(r -> {
+			if (r != null) {
 				return Jsoup.parse(r.body(), r.uri().toString());
 			}
 			return null;
@@ -355,10 +419,11 @@ public class SoupyClient extends HttpClient {
 	}
 
 	public static class FormConverter {
-		public static HttpRequest convertFormUsingQueryToRequest(Document d, String query, String...kvs) {
-			FormElement fe = (FormElement)d.selectFirst(query);
-			return convertFormToRequest(fe,kvs);
+		public static HttpRequest convertFormUsingQueryToRequest(Document d, String query, String... kvs) {
+			FormElement fe = (FormElement) d.selectFirst(query);
+			return convertFormToRequest(fe, kvs);
 		}
+
 		public static HttpRequest convertFormToRequest(Document d, String formId, String... kvs) {
 			FormElement fe = (FormElement) d.getElementById(formId);
 			return convertFormToRequest(fe, kvs);
@@ -545,5 +610,4 @@ public class SoupyClient extends HttpClient {
 		}
 	}
 
-	
 }
