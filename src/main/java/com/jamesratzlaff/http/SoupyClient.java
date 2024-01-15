@@ -17,13 +17,16 @@ import java.net.http.HttpResponse;
 import java.net.http.HttpResponse.BodyHandler;
 import java.net.http.HttpResponse.BodyHandlers;
 import java.net.http.HttpResponse.PushPromiseHandler;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.LongSummaryStatistics;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
@@ -32,6 +35,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Flow.Publisher;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import javax.net.ssl.SSLContext;
@@ -51,6 +55,9 @@ import com.github.mizosoft.methanol.MoreBodyHandlers;
 import com.github.mizosoft.methanol.MultipartBodyPublisher;
 import com.github.mizosoft.methanol.MutableRequest;
 import com.github.mizosoft.methanol.TypeRef;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.jamesratzlaff.http.ApiClientTiming.ClientTimingType;
 
 public class SoupyClient extends HttpClient {
 
@@ -66,7 +73,12 @@ public class SoupyClient extends HttpClient {
 		this.timings = new RequestTimings();
 		this.cookieManager = new CookieManager(null, CookiePolicy.ACCEPT_ALL);
 		this.defHeaders = defHeaders;
+		CookieImporterAndExporter.importCookiesDotTxt(this, null);
 
+	}
+	
+	public void saveCookies(Path p) {
+		CookieImporterAndExporter.exportNetscapeCookie(this, p);
 	}
 
 	public CookieManager getCookieManager() {
@@ -82,21 +94,22 @@ public class SoupyClient extends HttpClient {
 		if ("GET".equals(method)) {
 			bp = null;
 			request = request.method(method, null);
-		} else if(bp==null) {
-			bp=BodyPublishers.noBody();
+		} else if (bp == null) {
+			bp = BodyPublishers.noBody();
 		}
 		request = request.method(method, bp);
 		request.header("Referer", referer);
-		request.header("Accept","application/json");
+		request.header("Accept", "application/json");
 		return request;
 	}
-	
+
 	public <T> T getObjectByClass(String method, String path, String referer, BodyPublisher bp, Class<T> clazz) {
-		MutableRequest request=createObjectRequest(method, path, referer, bp);
+		MutableRequest request = createObjectRequest(method, path, referer, bp);
 		HttpResponse<T> response;
 		T reso = null;
 		try {
 			response = send(request, MoreBodyHandlers.ofObject(clazz));
+//			response = send(request, BodyHandlers.ofString());
 			reso = response.body();
 		} catch (IOException | InterruptedException e) {
 			// TODO Auto-generated catch block
@@ -108,15 +121,17 @@ public class SoupyClient extends HttpClient {
 
 	public <T> CompletableFuture<T> getObjectByClassAsync(String method, String path, String referer, BodyPublisher bp,
 			Class<T> clazz) {
-		var request = createObjectRequest(method, path,referer, bp);
+		var request = createObjectRequest(method, path, referer, bp);
 		CompletableFuture<HttpResponse<T>> response = sendAsync(request, MoreBodyHandlers.ofObject(clazz));
 		CompletableFuture<T> reso = response.thenApply(r -> r.body());
 		return reso;
 	}
-	public <T> CompletableFuture<T> getObjectAsync(String method, String path,String referer, BodyPublisher bp,
+
+	public <T> CompletableFuture<T> getObjectAsync(String method, String path, String referer, BodyPublisher bp,
 			Class<T> clazz) {
-		var request = createObjectRequest(method, path,referer, bp);
-		CompletableFuture<HttpResponse<T>> response = sendAsync(request, MoreBodyHandlers.ofObject(new TypeRef<T>() {}));
+		var request = createObjectRequest(method, path, referer, bp);
+		CompletableFuture<HttpResponse<T>> response = sendAsync(request, MoreBodyHandlers.ofObject(new TypeRef<T>() {
+		}));
 		CompletableFuture<T> reso = response.thenApply(r -> r.body());
 		return reso;
 	}
@@ -178,6 +193,25 @@ public class SoupyClient extends HttpClient {
 		List<HttpCookie> cookies = getCookieManager().getCookieStore().getCookies().stream()
 				.filter(c -> c.getName().equalsIgnoreCase(name)).collect(Collectors.toList());
 		return cookies;
+	}
+
+	public void addAllCookies(Collection<HttpCookie> cookies) {
+		if (cookies == null) {
+			cookies = Collections.emptyList();
+		}
+		cookies.forEach(cookie -> addCookie(cookie));
+	}
+
+	public String getCookiesAsJsonString() {
+		Gson gson = new GsonBuilder().setPrettyPrinting().create();
+		return gson.toJson(this.getCookies().stream().map(CookieImporterAndExporter.SerializableCookie::new)
+				.collect(Collectors.toList()));
+	}
+
+	public void addCookie(HttpCookie cookie) {
+		if (cookie != null) {
+			getCookieManager().getCookieStore().add(null, cookie);
+		}
 	}
 
 	public int hashCode() {
@@ -336,6 +370,15 @@ public class SoupyClient extends HttpClient {
 
 	public RequestTimings getTimings() {
 		return timings;
+	}
+
+	public Map<String, Map<ClientTimingType, LongSummaryStatistics>> getTimingStats(ClientTimingType... types) {
+		return getTimings().getStatistics(types);
+	}
+
+	public Map<String, Map<ClientTimingType, LongSummaryStatistics>> getTimingStats(Predicate<String> keyPredicate,
+			ClientTimingType... types) {
+		return getTimings().getStatistics(keyPredicate, types);
 	}
 
 	protected HttpResponse<String> getHttpResponse(String path) {
