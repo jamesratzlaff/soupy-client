@@ -1,6 +1,7 @@
 package com.jamesratzlaff.http;
 
 import java.io.IOException;
+import java.io.StringReader;
 import java.net.Authenticator;
 import java.net.CookieHandler;
 import java.net.CookieManager;
@@ -55,8 +56,14 @@ import com.github.mizosoft.methanol.MoreBodyHandlers;
 import com.github.mizosoft.methanol.MultipartBodyPublisher;
 import com.github.mizosoft.methanol.MutableRequest;
 import com.github.mizosoft.methanol.TypeRef;
+import com.github.mizosoft.methanol.internal.extensions.HeadersBuilder;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParseException;
+import com.google.gson.JsonParser;
+import com.google.gson.JsonStreamParser;
+import com.google.gson.stream.JsonReader;
 import com.jamesratzlaff.http.ApiClientTiming.ClientTimingType;
 
 public class SoupyClient extends HttpClient {
@@ -66,6 +73,9 @@ public class SoupyClient extends HttpClient {
 	private final String baseURI;
 	private final RequestTimings timings;
 	private final String[] defHeaders;
+	private static final String CUSTO_CONTENT_ACCEPT = "application/json, text/javascript, */*; q=0.01";
+	private int tries = 10;
+	private long waitBetweenTriesMillis = 30000;
 
 	public SoupyClient(String baseURI, String... defHeaders) {
 		super();
@@ -76,7 +86,26 @@ public class SoupyClient extends HttpClient {
 		CookieImporterAndExporter.importCookiesDotTxt(this, null);
 
 	}
-	
+
+	public int getTries() {
+		return tries;
+	}
+
+	public void setTries(int amt) {
+		if (amt < 1) {
+			amt = 1;
+		}
+		this.tries = amt;
+	}
+
+	public long getWaitBetweenTriesMillis() {
+		return this.waitBetweenTriesMillis;
+	}
+
+	public void setWaitBetweenTriesMillis(long waitTime) {
+		this.waitBetweenTriesMillis = waitTime;
+	}
+
 	public void saveCookies(Path p) {
 		CookieImporterAndExporter.exportNetscapeCookie(this, p);
 	}
@@ -87,6 +116,22 @@ public class SoupyClient extends HttpClient {
 
 	public String getBaseUri() {
 		return this.baseURI;
+	}
+
+	public String getFullUrl(String path) {
+		String base = getBaseUri();
+		String result = base;
+		if (path != null) {
+			if (base.endsWith("/")) {
+				base = base.substring(0, base.length() - 1);
+			}
+
+			if (path.startsWith("/")) {
+				path = path.substring(1);
+			}
+			result = String.join("/", base, path);
+		}
+		return result;
 	}
 
 	protected MutableRequest createObjectRequest(String method, String path, String referer, BodyPublisher bp) {
@@ -107,13 +152,25 @@ public class SoupyClient extends HttpClient {
 		MutableRequest request = createObjectRequest(method, path, referer, bp);
 		HttpResponse<T> response;
 		T reso = null;
-		try {
-			response = send(request, MoreBodyHandlers.ofObject(clazz));
+		Exception lastException=null;
+		for (int i = 0; reso == null && i < this.getTries(); i++) {
+			try {
+				if(lastException!=null) {
+					if(lastException.getLocalizedMessage().indexOf("GOAWAY")>-1) {
+						Thread.sleep(i*getWaitBetweenTriesMillis());
+					} else {
+						Thread.sleep(getWaitBetweenTriesMillis());
+					}
+				}
+				response = send(request, MoreBodyHandlers.ofObject(clazz));
 //			response = send(request, BodyHandlers.ofString());
-			reso = response.body();
-		} catch (IOException | InterruptedException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
+				reso = response.body();
+				lastException=null;
+			} catch (IOException | InterruptedException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+				lastException=e;
+			}
 		}
 
 		return reso;
@@ -382,7 +439,19 @@ public class SoupyClient extends HttpClient {
 	}
 
 	protected HttpResponse<String> getHttpResponse(String path) {
-		return getHttpResponse(path, null);
+		return getHttpResponse(path, (String) null);
+	}
+
+	protected HttpResponse<String> getHttpResponse(String path, HttpHeaders headers) {
+		HttpResponse<String> response = null;
+		try {
+			HttpRequest req = createHttpGetRequest(path, headers);
+			response = send(req, BodyHandlers.ofString());
+		} catch (IOException | InterruptedException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		return response;
 	}
 
 	protected HttpResponse<String> getHttpResponse(String path, String referer) {
@@ -397,8 +466,54 @@ public class SoupyClient extends HttpClient {
 		return response;
 	}
 
+	protected JsonElement getJsonHttpResponse(String path, String referer) {
+		HeadersBuilder builder = new HeadersBuilder();
+		builder.add("Accept", CUSTO_CONTENT_ACCEPT);
+		if (referer != null) {
+			builder.add("Referer", referer);
+		}
+		HttpResponse<String> response = getHttpResponse(path, builder.build());
+		return jsonFromHttpResponse(response);
+	}
+
+	private JsonElement jsonFromHttpResponse(HttpResponse<String> response) {
+		JsonElement je = null;
+		if (response != null && response.statusCode() < 400) {
+			try {
+				JsonParser jp = new JsonParser();
+				je = jp.parse(response.body());
+			} catch (JsonParseException e) {
+				System.err.println(e);
+			}
+		}
+		return je;
+	}
+
 	protected CompletableFuture<HttpResponse<String>> getHttpResponseAsync(String path) {
-		return getHttpResponseAsync(path, null);
+		return getHttpResponseAsync(path, (String) null);
+	}
+
+	protected CompletableFuture<JsonElement> getJsonResponseAsync(String path, HttpHeaders headers) {
+		CompletableFuture<HttpResponse<String>> response = null;
+		HttpRequest req = createHttpGetRequest(path, headers);
+		response = sendAsync(req, BodyHandlers.ofString());
+		return response.thenApply(this::jsonFromHttpResponse);
+	}
+
+	protected CompletableFuture<JsonElement> getJsonResponseAsync(String path, String referer) {
+		HeadersBuilder builder = new HeadersBuilder();
+		builder.add("Accept", CUSTO_CONTENT_ACCEPT);
+		if (referer != null) {
+			builder.add("Referer", referer);
+		}
+		return getJsonResponseAsync(path, builder.build());
+	}
+
+	protected CompletableFuture<HttpResponse<String>> getHttpResponseAsync(String path, HttpHeaders headers) {
+		CompletableFuture<HttpResponse<String>> response = null;
+		HttpRequest req = createHttpGetRequest(path, headers);
+		response = sendAsync(req, BodyHandlers.ofString());
+		return response;
 	}
 
 	protected CompletableFuture<HttpResponse<String>> getHttpResponseAsync(String path, String referer) {
@@ -408,12 +523,23 @@ public class SoupyClient extends HttpClient {
 		return response;
 	}
 
-	protected HttpRequest createHttpGetRequest(String path, String referer) {
+	protected HttpRequest createHttpGetRequest(String path, HttpHeaders headers) {
 		MutableRequest req = MutableRequest.GET(path);
-		if (referer != null) {
-			req = req.header("Referer", referer);
+		if (headers != null) {
+			req = req.headers(headers);
 		}
 		return req;
+	}
+
+	protected HttpRequest createHttpGetRequest(String path, String referer) {
+		HttpHeaders header = null;
+		if (referer != null) {
+			HeadersBuilder hb = new HeadersBuilder();
+			hb.add("Referer", referer);
+			header = hb.build();
+		}
+		return createHttpGetRequest(path, header);
+
 	}
 
 	public Document getDocumentWithBase64EncLastPathNode(String path, String referer) {
